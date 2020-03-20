@@ -133,7 +133,24 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 // associate a given bounding box with the keypoints it contains
 void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches)
 {
-    // ...
+    float average_distance = 0.0f;
+    size_t valid_pt_size = 0;
+    for(cv::DMatch& kptMatch : kptMatches) {
+        if(boundingBox.roi.contains(kptsCurr[kptMatch.trainIdx].pt)){
+            average_distance = average_distance + kptMatch.distance; 
+            valid_pt_size++;
+        }
+    }
+    if(valid_pt_size == 0){
+        return;
+    }
+    average_distance = average_distance / valid_pt_size;
+    for(cv::DMatch& kptMatch : kptMatches) {
+        auto& curr_pt = kptsCurr[kptMatch.trainIdx].pt;
+        if(boundingBox.roi.contains(curr_pt) && kptMatch.distance < average_distance) {
+            boundingBox.kptMatches.push_back(kptMatch);
+        }
+    }
 }
 
 
@@ -141,18 +158,87 @@ void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint
 void computeTTCCamera(std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, 
                       std::vector<cv::DMatch> kptMatches, double frameRate, double &TTC, cv::Mat *visImg)
 {
-    // ...
+    vector<double> distRatios;
+    for (auto it1 = kptMatches.begin(); it1 != kptMatches.end() - 1; ++it1)
+    {
+        cv::KeyPoint kpOuterCurr = kptsCurr.at(it1->trainIdx);
+        cv::KeyPoint kpOuterPrev = kptsPrev.at(it1->queryIdx);
+        for (auto it2 = kptMatches.begin() + 1; it2 != kptMatches.end(); ++it2)
+        {
+            double minDist = 100.0; // min. required distance
+
+            cv::KeyPoint kpInnerCurr = kptsCurr.at(it2->trainIdx);
+            cv::KeyPoint kpInnerPrev = kptsPrev.at(it2->queryIdx);
+
+            double distCurr = cv::norm(kpOuterCurr.pt - kpInnerCurr.pt);
+            double distPrev = cv::norm(kpOuterPrev.pt - kpInnerPrev.pt);
+            if (distPrev > std::numeric_limits<double>::epsilon() && distCurr >= minDist)
+            {
+                double distRatio = distCurr / distPrev;
+                distRatios.push_back(distRatio);
+            }
+        }
+    }     
+
+    if (distRatios.size() == 0)
+    {
+        TTC = NAN;
+        return;
+    }
+
+    std::sort(distRatios.begin(), distRatios.end());
+    long medIndex = floor(distRatios.size() / 2.0);
+    double medDistRatio = distRatios.size() % 2 == 0 ? (distRatios[medIndex - 1] + distRatios[medIndex]) / 2.0 : distRatios[medIndex];
+
+    double dT = 1 / frameRate;
+    TTC = -dT / (1 - medDistRatio);
 }
 
 
 void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
                      std::vector<LidarPoint> &lidarPointsCurr, double frameRate, double &TTC)
 {
-    // ...
+    double average_prev_x = 0.0, average_curr_x = 0.0;
+    for(auto it=lidarPointsPrev.begin(); it!=lidarPointsPrev.end(); ++it) {
+        average_prev_x = average_prev_x + it->x;
+    }
+    average_prev_x = average_prev_x / lidarPointsPrev.size();
+
+    for(auto it=lidarPointsCurr.begin(); it!=lidarPointsCurr.end(); ++it) {
+        average_curr_x = average_curr_x + it->x;
+    }
+    average_curr_x = average_curr_x / lidarPointsCurr.size();
+
+    TTC = average_curr_x * (1.0 / frameRate) / (average_prev_x - average_curr_x);
 }
 
 
 void matchBoundingBoxes(std::vector<cv::DMatch> &matches, std::map<int, int> &bbBestMatches, DataFrame &prevFrame, DataFrame &currFrame)
 {
-    // ...
+    cv::Mat count_table = cv::Mat::zeros(prevFrame.boundingBoxes.size() , currFrame.boundingBoxes.size(), CV_32S);
+    for(cv::DMatch& match_point : matches) {
+        const auto& prev_pt = prevFrame.keypoints[match_point.queryIdx].pt;
+        const auto& curr_pt = currFrame.keypoints[match_point.trainIdx].pt;
+        for(size_t i = 0; i < prevFrame.boundingBoxes.size(); ++i) {
+            for(size_t j = 0; j < currFrame.boundingBoxes.size(); ++j) {
+                if(prevFrame.boundingBoxes[i].roi.contains(prev_pt) &&  currFrame.boundingBoxes[j].roi.contains(curr_pt)) {
+                    count_table.at<int>(i,j)++;
+                }
+            }
+        }
+    }
+    int best_match_value, best_match_idx;
+    for(size_t i = 0; i < count_table.rows; ++i) {
+        best_match_value = 0;
+        best_match_idx = -1;
+        for(size_t j = 0; j < count_table.cols; ++j) {
+            if(count_table.at<int>(i,j) > 0 && count_table.at<int>(i,j) > best_match_value){
+                best_match_idx = j;
+                best_match_value = count_table.at<int>(i,j);
+            }
+        }
+        if(best_match_idx != -1) {
+            bbBestMatches.emplace(i, best_match_idx);
+        }
+    }
 }
