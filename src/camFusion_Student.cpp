@@ -125,7 +125,7 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 
     if(bWait)
     {
-        cv::waitKey(0); // wait for key to be pressed
+        //cv::waitKey(0); // wait for key to be pressed
     }
 }
 
